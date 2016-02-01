@@ -9,8 +9,11 @@ import (
 	"os"
 )
 
-const chunkStartOffset = 8
-const endChunk = "IEND"
+const (
+	chunkStartOffset = 8
+	endChunk         = "IEND"
+	usage            = "Usage: png-crc-fix FILE"
+)
 
 type pngChunk struct {
 	Offset int64
@@ -21,19 +24,25 @@ type pngChunk struct {
 }
 
 func main() {
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, usage)
+
+		return
+	}
+
 	filePath := os.Args[1]
 
 	file, err := os.Open(filePath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(-1)
+		os.Exit(1)
 	}
 
 	defer file.Close()
 
 	if !isPng(file) {
 		fmt.Fprintln(os.Stderr, "Not a PNG")
-		os.Exit(-1)
+		os.Exit(1)
 	}
 
 	// Read all the chunks. They start with IHDR at offset 8
@@ -44,17 +53,21 @@ func main() {
 		if !chunk.CRCIsValid() {
 			file.Seek(chunk.CRCOffset(), os.SEEK_SET)
 			binary.Write(file, binary.BigEndian, chunk.CalculateCRC())
+			fmt.Println("Corrected CRC")
 		}
-
-		fmt.Println("Corrected CRC")
 	}
 }
 
 func (p pngChunk) String() string {
-	return fmt.Sprintf("%s@%x - %X - Valid CRC? %v", p.Type, p.Offset, p.CRC, p.CRCIsValid())
+	return fmt.Sprintf("%s@%x - %X - Valid CRC? %v",
+		p.Type,
+		p.Offset,
+		p.CRC,
+		p.CRCIsValid())
 }
 
-func (p pngChunk) Bytes() []byte {
+// BytesForCRC returns the bytes that contribute to the chunk's CRC32
+func (p pngChunk) BytesForCRC() []byte {
 	var buffer bytes.Buffer
 
 	binary.Write(&buffer, binary.BigEndian, p.Type)
@@ -63,20 +76,26 @@ func (p pngChunk) Bytes() []byte {
 	return buffer.Bytes()
 }
 
+// CRCIsValid returns a boolean value indicating if thethe CRC32 for the given
+// chunk is valid
 func (p pngChunk) CRCIsValid() bool {
 	return p.CRC == p.CalculateCRC()
 }
 
+// CalculateCRC calculates the CRC of the chunk
 func (p pngChunk) CalculateCRC() uint32 {
 	crcTable := crc32.MakeTable(crc32.IEEE)
 
-	return crc32.Checksum(p.Bytes(), crcTable)
+	return crc32.Checksum(p.BytesForCRC(), crcTable)
 }
 
+// Returns the reader offset of the CRC32 for this chunk
 func (p pngChunk) CRCOffset() int64 {
 	return p.Offset + int64(8+p.Length)
 }
 
+// readChunks reads the chunks from the reader. If an error occurs then reading
+// stops and the chunks read up to that point are returned
 func readChunks(reader io.ReadSeeker) []pngChunk {
 	chunks := []pngChunk{}
 
@@ -131,11 +150,12 @@ func readChunks(reader io.ReadSeeker) []pngChunk {
 	return chunks
 }
 
-func isPng(f *os.File) bool {
-	f.Seek(1, os.SEEK_SET)
+// Checks if the file is a valid PNG
+func isPng(s io.ReadSeeker) bool {
+	s.Seek(1, os.SEEK_SET)
 
 	magic := make([]byte, 3)
-	f.Read(magic)
+	s.Read(magic)
 
 	return string(magic) == "PNG"
 }
