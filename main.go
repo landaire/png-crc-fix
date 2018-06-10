@@ -114,7 +114,7 @@ func readChunks(reader io.ReadSeeker) []pngChunk {
 			goto read_error
 		}
 
-		if read, err := reader.Read(chunk.Data); read == 0 || err != nil {
+		if _, err = io.ReadFull(reader, chunk.Data); err != nil {
 			goto read_error
 		}
 
