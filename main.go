@@ -106,11 +106,14 @@ func readChunks(reader io.ReadSeeker) []pngChunk {
 		var chunk pngChunk
 		chunk.Offset, _ = reader.Seek(0, os.SEEK_CUR)
 
-		binary.Read(reader, binary.BigEndian, &chunk.Length)
+		err := binary.Read(reader, binary.BigEndian, &chunk.Length)
+		if err != nil {
+			goto read_error
+		}
 
 		chunk.Data = make([]byte, chunk.Length)
 
-		err := binary.Read(reader, binary.BigEndian, &chunk.Type)
+		err = binary.Read(reader, binary.BigEndian, &chunk.Type)
 		if err != nil {
 			goto read_error
 		}
