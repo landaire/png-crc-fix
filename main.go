@@ -32,7 +32,7 @@ func main() {
 
 	filePath := os.Args[1]
 
-	file, err := os.Open(filePath)
+	file, err := os.OpenFile(filePath, os.O_RDWR, 0644)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
