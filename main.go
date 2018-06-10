@@ -13,6 +13,7 @@ const (
 	chunkStartOffset = 8
 	endChunk         = "IEND"
 	usage            = "Usage: png-crc-fix FILE"
+	magic            = "\x89PNG\x0d\x0a\x1a\x0a"
 )
 
 type pngChunk struct {
@@ -151,11 +152,12 @@ func readChunks(reader io.ReadSeeker) []pngChunk {
 }
 
 // Checks if the file is a valid PNG
-func isPng(s io.ReadSeeker) bool {
-	s.Seek(1, os.SEEK_SET)
+func isPng(s io.Reader) bool {
+	h := make([]byte, 8)
+	_, err := io.ReadFull(s, h)
+	if err != nil {
+		return false
+	}
 
-	magic := make([]byte, 3)
-	s.Read(magic)
-
-	return string(magic) == "PNG"
+	return string(h) == magic
 }
