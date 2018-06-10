@@ -9,8 +9,12 @@ import (
 	"os"
 )
 
-const chunkStartOffset = 8
-const endChunk = "IEND"
+const (
+	chunkStartOffset = 8
+	endChunk         = "IEND"
+	usage            = "Usage: png-crc-fix FILE"
+	magic            = "\x89PNG\x0d\x0a\x1a\x0a"
+)
 
 type pngChunk struct {
 	Offset int64
@@ -21,40 +25,57 @@ type pngChunk struct {
 }
 
 func main() {
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, usage)
+
+		return
+	}
+
 	filePath := os.Args[1]
 
-	file, err := os.Open(filePath)
+	file, err := os.OpenFile(filePath, os.O_RDWR, 0644)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(-1)
+		os.Exit(1)
 	}
 
 	defer file.Close()
 
 	if !isPng(file) {
 		fmt.Fprintln(os.Stderr, "Not a PNG")
-		os.Exit(-1)
+		os.Exit(1)
 	}
 
+	fi, err := file.Stat()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	maxChunkLength := uint32(fi.Size())
+
 	// Read all the chunks. They start with IHDR at offset 8
-	chunks := readChunks(file)
+	chunks := readChunks(file, maxChunkLength)
 
 	for _, chunk := range chunks {
 		fmt.Println(chunk)
 		if !chunk.CRCIsValid() {
 			file.Seek(chunk.CRCOffset(), os.SEEK_SET)
 			binary.Write(file, binary.BigEndian, chunk.CalculateCRC())
+			fmt.Println("Corrected CRC")
 		}
-
-		fmt.Println("Corrected CRC")
 	}
 }
 
 func (p pngChunk) String() string {
-	return fmt.Sprintf("%s@%x - %X - Valid CRC? %v", p.Type, p.Offset, p.CRC, p.CRCIsValid())
+	return fmt.Sprintf("%s@%x - %X - Valid CRC? %v",
+		p.Type,
+		p.Offset,
+		p.CRC,
+		p.CRCIsValid())
 }
 
-func (p pngChunk) Bytes() []byte {
+// BytesForCRC returns the bytes that contribute to the chunk's CRC32
+func (p pngChunk) BytesForCRC() []byte {
 	var buffer bytes.Buffer
 
 	binary.Write(&buffer, binary.BigEndian, p.Type)
@@ -63,21 +84,28 @@ func (p pngChunk) Bytes() []byte {
 	return buffer.Bytes()
 }
 
+// CRCIsValid returns a boolean value indicating if thethe CRC32 for the given
+// chunk is valid
 func (p pngChunk) CRCIsValid() bool {
 	return p.CRC == p.CalculateCRC()
 }
 
+// CalculateCRC calculates the CRC of the chunk
 func (p pngChunk) CalculateCRC() uint32 {
 	crcTable := crc32.MakeTable(crc32.IEEE)
 
-	return crc32.Checksum(p.Bytes(), crcTable)
+	return crc32.Checksum(p.BytesForCRC(), crcTable)
 }
 
+// Returns the reader offset of the CRC32 for this chunk
 func (p pngChunk) CRCOffset() int64 {
 	return p.Offset + int64(8+p.Length)
 }
 
-func readChunks(reader io.ReadSeeker) []pngChunk {
+// readChunks reads the chunks from the reader. If an error occurs then reading
+// stops and the chunks read up to that point are returned.
+// maxChunkLength represents maximum value of length field of a chunk.
+func readChunks(reader io.ReadSeeker, maxChunkLength uint32) []pngChunk {
 	chunks := []pngChunk{}
 
 	reader.Seek(chunkStartOffset, os.SEEK_SET)
@@ -86,16 +114,23 @@ func readChunks(reader io.ReadSeeker) []pngChunk {
 		var chunk pngChunk
 		chunk.Offset, _ = reader.Seek(0, os.SEEK_CUR)
 
-		binary.Read(reader, binary.BigEndian, &chunk.Length)
-
-		chunk.Data = make([]byte, chunk.Length)
-
-		err := binary.Read(reader, binary.BigEndian, &chunk.Type)
+		err := binary.Read(reader, binary.BigEndian, &chunk.Length)
 		if err != nil {
 			goto read_error
 		}
 
-		if read, err := reader.Read(chunk.Data); read == 0 || err != nil {
+		if chunk.Length > maxChunkLength {
+			return nil, fmt.Errorf("chunk length exceeds maximum length")
+		}
+
+		chunk.Data = make([]byte, chunk.Length)
+
+		err = binary.Read(reader, binary.BigEndian, &chunk.Type)
+		if err != nil {
+			goto read_error
+		}
+
+		if _, err = io.ReadFull(reader, chunk.Data); err != nil {
 			goto read_error
 		}
 
@@ -131,11 +166,13 @@ func readChunks(reader io.ReadSeeker) []pngChunk {
 	return chunks
 }
 
-func isPng(f *os.File) bool {
-	f.Seek(1, os.SEEK_SET)
+// Checks if the file is a valid PNG
+func isPng(s io.Reader) bool {
+	h := make([]byte, 8)
+	_, err := io.ReadFull(s, h)
+	if err != nil {
+		return false
+	}
 
-	magic := make([]byte, 3)
-	f.Read(magic)
-
-	return string(magic) == "PNG"
+	return string(h) == magic
 }
