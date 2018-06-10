@@ -46,8 +46,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	fi, err := file.Stat()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	maxChunkLength := uint32(fi.Size())
+
 	// Read all the chunks. They start with IHDR at offset 8
-	chunks := readChunks(file)
+	chunks := readChunks(file, maxChunkLength)
 
 	for _, chunk := range chunks {
 		fmt.Println(chunk)
@@ -96,8 +103,9 @@ func (p pngChunk) CRCOffset() int64 {
 }
 
 // readChunks reads the chunks from the reader. If an error occurs then reading
-// stops and the chunks read up to that point are returned
-func readChunks(reader io.ReadSeeker) []pngChunk {
+// stops and the chunks read up to that point are returned.
+// maxChunkLength represents maximum value of length field of a chunk.
+func readChunks(reader io.ReadSeeker, maxChunkLength uint32) []pngChunk {
 	chunks := []pngChunk{}
 
 	reader.Seek(chunkStartOffset, os.SEEK_SET)
@@ -109,6 +117,10 @@ func readChunks(reader io.ReadSeeker) []pngChunk {
 		err := binary.Read(reader, binary.BigEndian, &chunk.Length)
 		if err != nil {
 			goto read_error
+		}
+
+		if chunk.Length > maxChunkLength {
+			return nil, fmt.Errorf("chunk length exceeds maximum length")
 		}
 
 		chunk.Data = make([]byte, chunk.Length)
